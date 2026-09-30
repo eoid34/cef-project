@@ -1,0 +1,101 @@
+name: Build CEF Project on Windows
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive # 如果使用了子模块
+
+      - name: Setup Visual Studio
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[17.0,)' # 使用 VS 2022
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.x'
+
+      - name: Cache CEF Binary
+        id: cache-cef
+        uses: actions/cache@v4
+        with:
+          path: third_party/cef
+          key: ${{ runner.os }}-cef-${{ env.CEF_VERSION }}
+
+      - name: Set CEF Version
+        run: |
+          # 请在此处更新为你想要使用的 CEF 版本
+          # 注意：版本号必须与 third_party/cef 中的目录结构或下载链接匹配
+          echo "CEF_VERSION=122.1.10+g8e55625+chromium-122.0.6261.112" >> $GITHUB_ENV
+          echo "CEF_URL=https://cef-builds.spotifycdn.com/cef_binary_122.1.10+g8e55625+chromium-122.0.6261.112_windows64.tar.bz2" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Download CEF Binary Distribution
+        if: steps.cache-cef.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p third_party/cef
+          cd third_party/cef
+          Invoke-WebRequest -Uri $env:CEF_URL -OutFile "cef.tar.bz2"
+          tar -xjf cef.tar.bz2
+          # 重命名解压后的文件夹为固定名称，方便 CMake 引用
+          Get-ChildItem -Directory -Filter "cef_binary_*" | Rename-Item -NewName "cef_binary"
+          Remove-Item cef.tar.bz2
+        shell: pwsh
+
+      - name: Configure CMake
+        run: |
+          mkdir build
+          cd build
+          # 关键点：指向 third_party/cef/cef_binary 作为 CEF 根目录
+          # 如果 cef-project 的 CMakeLists.txt 已经配置好自动查找 third_party/cef，则无需额外参数
+          # 否则可能需要指定 -DCEF_ROOT="../third_party/cef/cef_binary"
+          cmake .. -G "Visual Studio 17 2022" -A x64
+        shell: pwsh
+
+      - name: Build Project
+        run: |
+          cd build
+          # 编译所有目标，或者指定特定目标如 cefsimple, cefclient, myapp
+          cmake --build . --config Release
+        shell: pwsh
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir release_package
+          
+          # 假设你编译的是 cefsimple，如果是其他项目请修改路径
+          # cef-project 通常将输出放在 build/tests/cefsimple/Release 或类似位置
+          # 这里以 cefsimple 为例，如果你编译的是 myapp，请改为 build/myapp/Release/myapp.exe
+          
+          $exePath = "build/tests/cefsimple/Release/cefsimple.exe"
+          if (Test-Path $exePath) {
+            Copy-Item $exePath release_package/
+          } else {
+            # 尝试查找其他可能的 exe 位置
+            Get-ChildItem -Path build -Recurse -Filter "*.exe" | Copy-Item -Destination release_package/
+          }
+
+          # 复制必要的 DLL 和资源文件
+          # CEF 需要 libcef.dll 和 Resources 文件夹才能运行
+          $cefRoot = "third_party/cef/cef_binary"
+          if (Test-Path "$cefRoot/Release/libcef.dll") {
+            Copy-Item "$cefRoot/Release/*.dll" release_package/
+            Copy-Item "$cefRoot/Resources/*" release_package/ -Recurse
+          }
+        shell: pwsh
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cef-windows-exe
+          path: release_package/
