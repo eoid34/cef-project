@@ -1,0 +1,34 @@
+
+name: Build CEF on Windows
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: microsoft/setup-msbuild@v2
+      
+      - name: Build
+        run: |
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake --build . --config Release --target cefsimple
+          
+          mkdir ../release
+          cp tests/cefsimple/Release/cefsimple.exe ../release/
+          cp ../third_party/cef/cef_binary/Release/libcef.dll ../release/
+          cp ../third_party/cef/cef_binary/Release/chrome_elf.dll ../release/
+          cp -Recurse ../third_party/cef/cef_binary/Resources/* ../release/
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cefsimple-win64
+          path: release/
